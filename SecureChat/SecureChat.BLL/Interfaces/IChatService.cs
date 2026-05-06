@@ -8,9 +8,9 @@ namespace SecureChat.BLL.Interfaces
 {
     public interface IChatService
     {
-        Task<MessageDto> SendMessageAsync(Guid senderId, Guid receiverId, string plainTextMessage);
+        Task<MessageDto> SendMessageAsync(Guid senderId, Guid receiverId, string encryptedMessageFromClient, string encryptedAesKeyFromClient);
 
-        Task<IEnumerable<MessageDto>> GetChatHistoryAsync(Guid user1Id, Guid user2Id);
+        Task<IEnumerable<MessageDto>> GetChatHistoryAsync(Guid callerId, Guid otherUserId);
 
         Task<bool> UpdateDeliveryStatusAsync(Guid messageId, DeliveryStatus newStatus);
 

@@ -8,7 +8,8 @@ namespace SecureChat.BLL.DTOs.Chat
         public Guid Id { get; set; }
         public Guid SenderId { get; set; }
         public Guid ReceiverId { get; set; }
-        public string Text { get; set; } // Plaintext after decrypting
+        public string EncryptedText { get; set; }
+        public string EncryptedAesKey { get; set; }
         public DeliveryStatus DeliveryStatus { get; set; }
         public DateTime SentAt { get; set; }
     }

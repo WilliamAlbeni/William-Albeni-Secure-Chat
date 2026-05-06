@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { searchUser, getChatHistory, getChatContacts } from '../services/api'; // تمت إزالة markChatAsRead لأننا نستخدم SignalR الآن
+import { searchUser, getChatHistory, getChatContacts } from '../services/api';
 import connection, { startConnection } from '../services/signalrService';
+import { cryptoService } from '../services/cryptoService';
 
 export default function ChatRoom() {
     const navigate = useNavigate();
@@ -25,9 +26,7 @@ export default function ChatRoom() {
         activeContactRef.current = activeContact;
     }, [activeContact]);
 
-    // ---------------------------------------------------------
-    // 1. SignalR Connection & Listening
-    // ---------------------------------------------------------
+    // SignalR Connection & Listening
     useEffect(() => {
         if (!currentUserId) {
             navigate('/'); 
@@ -48,15 +47,35 @@ export default function ChatRoom() {
         // Listen for new incoming messages
         connection.on("ReceiveMessage", (messageDto) => {
             const senderId = messageDto.senderId || messageDto.SenderId;
-            const messageText = messageDto.text || messageDto.Text;
-            
             const deliveryStatus = messageDto.deliveryStatus || messageDto.DeliveryStatus || 2; 
+
+            
+            let plainText = "[Decryption Failed]";
+            try {
+                const myPrivateKey = localStorage.getItem(`privateKey_${currentUserId}`);
+                const encryptedAesKey = messageDto.encryptedAesKey || messageDto.EncryptedAesKey;
+                const encryptedText = messageDto.encryptedText || messageDto.EncryptedText;
+
+                if (encryptedAesKey && encryptedText && myPrivateKey) {
+                    
+                    const decryptedAesKey = cryptoService.decryptAesKeyWithRsa(encryptedAesKey, myPrivateKey);
+                    if (decryptedAesKey) {
+                        
+                        plainText = cryptoService.decryptMessageWithAes(encryptedText, decryptedAesKey);
+                    }
+                } else {
+                
+                    plainText = messageDto.text || messageDto.Text || "[Invalid Encrypted Payload]";
+                }
+            } catch (error) {
+                console.error("Error decrypting incoming message:", error);
+            }
 
             if (activeContactRef.current && activeContactRef.current.id === senderId) {
                 // If chat is open, show the message immediately
                 setMessages(prev => [...prev, { 
                     senderId: senderId, 
-                    content: messageText, 
+                    content: plainText, 
                     isMine: false,
                     deliveryStatus: deliveryStatus
                 }]);
@@ -79,14 +98,14 @@ export default function ChatRoom() {
             }
         });
 
-        // NEW: Listen for "Delivered" status (2 Gray Ticks) from the backend SendPrivateMessage
+        // Listen for "Delivered" status (2 Gray Ticks) 
         connection.on("MessageDeliveredToDevice", (deliveredMessageId) => {
             setMessages(prev => prev.map(m => 
                 (m.isMine && m.deliveryStatus === 1) ? { ...m, deliveryStatus: 2 } : m
             ));
         });
 
-        // NEW: Listen for "Read" status (2 Blue Ticks) from the other user
+        // Listen for "Read" status (2 Blue Ticks) 
         connection.on("MessagesReadByDevice", (readerId) => {
             if (activeContactRef.current && activeContactRef.current.id === readerId) {
                 setMessages(prev => prev.map(m => 
@@ -102,19 +121,39 @@ export default function ChatRoom() {
         };
     }, [currentUserId, navigate]);
 
-    // ---------------------------------------------------------
-    // 2. Fetch Chat History & Contacts
-    // ---------------------------------------------------------
+    // Fetch Chat History & Contacts
     useEffect(() => {
         const loadHistory = async () => {
             if (activeContact && currentUserId) {
                 const history = await getChatHistory(currentUserId, activeContact.id);
-                const formattedHistory = history.map(msg => ({
-                    senderId: msg.senderId || msg.SenderId,
-                    content: msg.text || msg.Text || msg.OriginalPayload, 
-                    isMine: (msg.senderId || msg.SenderId).toLowerCase() === currentUserId.toLowerCase(),
-                    deliveryStatus: msg.deliveryStatus ?? msg.DeliveryStatus ?? 1 
-                }));
+                
+                const myPrivateKey = localStorage.getItem(`privateKey_${currentUserId}`);
+
+                const formattedHistory = history.map(msg => {
+                    let plainText = "[Decryption Failed]";
+                    try {
+                        const encryptedAesKey = msg.encryptedAesKey || msg.EncryptedAesKey;
+                        const encryptedText = msg.encryptedText || msg.EncryptedText;
+
+                        if (encryptedAesKey && encryptedText && myPrivateKey) {
+                            const decryptedAesKey = cryptoService.decryptAesKeyWithRsa(encryptedAesKey, myPrivateKey);
+                            if (decryptedAesKey) {
+                                plainText = cryptoService.decryptMessageWithAes(encryptedText, decryptedAesKey);
+                            }
+                        } else {
+                            plainText = msg.text || msg.Text || msg.OriginalPayload || "[Plain Text Fallback]";
+                        }
+                    } catch (error) {
+                        console.error("Error decrypting history message:", error);
+                    }
+
+                    return {
+                        senderId: msg.senderId || msg.SenderId,
+                        content: plainText, 
+                        isMine: (msg.senderId || msg.SenderId).toLowerCase() === currentUserId.toLowerCase(),
+                        deliveryStatus: msg.deliveryStatus ?? msg.DeliveryStatus ?? 1 
+                    };
+                });
                 setMessages(formattedHistory);
             }
         };
@@ -137,9 +176,7 @@ export default function ChatRoom() {
         loadContactsFromDatabase();
     }, [currentUserId]);
 
-    // ---------------------------------------------------------
-    // 3. UI Interactions
-    // ---------------------------------------------------------
+    // UI Interactions
     const handleSelectContact = (contact) => {
         setActiveContact(contact);
         setMessages([]); 
@@ -150,7 +187,6 @@ export default function ChatRoom() {
         ));
 
         // Tell backend to change DeliveryStatus to 3 (Read) via SignalR
-        // We check if there's an unread count OR if there are any unread messages loaded
         if (contact.unreadCount > 0) {
             connection.invoke("NotifyMessagesRead", contact.id, currentUserId)
                 .catch(err => console.error("Error notifying read:", err));
@@ -180,31 +216,57 @@ export default function ChatRoom() {
         e.preventDefault();
         if (!messageInput.trim() || !activeContact) return;
 
+        const plainText = messageInput;
+        setMessageInput('');
+
+        setMessages(prev => [...prev, { 
+            senderId: currentUserId, 
+            content: plainText, 
+            isMine: true, 
+            deliveryStatus: 1 
+        }]);
+
         try {
-            // Optimistically show message on screen with status 1 (Sent / 1 tick)
-            setMessages(prev => [...prev, { 
-                senderId: currentUserId, 
-                content: messageInput, 
-                isMine: true, 
-                deliveryStatus: 1 
-            }]);
+            const serverPublicKey = localStorage.getItem('serverPublicKey');
+            if (!serverPublicKey) {
+                console.error("Server Public Key is missing!");
+                return;
+            }
+
+            const sessionAesKey = cryptoService.generateAesKey();
+
+            const encryptedMessage = cryptoService.encryptMessageWithAes(plainText, sessionAesKey);
+
+            const encryptedAesKey = cryptoService.encryptAesKeyWithRsa(sessionAesKey, serverPublicKey);
+
+            await connection.invoke(
+                "SendPrivateMessage", 
+                currentUserId, 
+                activeContact.id, 
+                encryptedMessage,
+                encryptedAesKey
+            );
             
-            await connection.invoke("SendPrivateMessage", currentUserId, activeContact.id, messageInput);
-            setMessageInput('');
         } catch (error) {
-            console.error("Failed to send message: ", error);
+            console.error("Failed to encrypt or send message: ", error);
         }
     };
 
-    const handleLogout = () => {
-        localStorage.clear();
-        navigate('/');
-    };
+    const handleLogout = async () => {
+    try {
+        if (connection && connection.state === "Connected") {
+            await connection.stop();
+        }
+    } catch (err) {
+        console.error("Error stopping SignalR:", err);
+    }
+    
+    localStorage.removeItem('currentUserId');
+    localStorage.removeItem('currentUsername');
+    
+    navigate('/');
+};
 
-    // ---------------------------------------------------------
-    // Helper: Render WhatsApp style ticks based on Enum values
-    // 1 = Sent, 2 = Delivered, 3 = Read
-    // ---------------------------------------------------------
     const renderTicks = (status) => {
         if (status === 1) return <span style={styles.tickSent}>✓</span>;           // 1 gray tick
         if (status === 2) return <span style={styles.tickDelivered}>✓✓</span>;      // 2 gray ticks

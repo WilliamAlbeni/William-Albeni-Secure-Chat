@@ -14,11 +14,13 @@ namespace SecureChat.BLL.Services
         private readonly IUserRepository _userRepository;
         private readonly string _pepper;
 
-        
-        public AuthService(IUserRepository userRepository, IOptions<SecuritySettings> securitySettings)
+        private readonly ICryptoService _cryptoService;
+
+        public AuthService(IUserRepository userRepository, IOptions<SecuritySettings> securitySettings, ICryptoService cryptoService)
         {
             _userRepository = userRepository;
             _pepper = securitySettings.Value.PasswordPepper;
+            _cryptoService = cryptoService;
         }
 
         public async Task<AuthResultDto> RegisterAsync(RegisterDto dto)
@@ -50,7 +52,8 @@ namespace SecureChat.BLL.Services
             {
                 UserId = newUser.Id,
                 Username = newUser.Username,
-                PublicKey = newUser.PublicKey
+                PublicKey = newUser.PublicKey,
+                ServerPublicKey = _cryptoService.GetServerPublicKey()
             };
         }
 
@@ -73,7 +76,8 @@ namespace SecureChat.BLL.Services
             {
                 UserId = user.Id,
                 Username = user.Username,
-                PublicKey = user.PublicKey
+                PublicKey = user.PublicKey,
+                ServerPublicKey = _cryptoService.GetServerPublicKey()
             };
         }
     }

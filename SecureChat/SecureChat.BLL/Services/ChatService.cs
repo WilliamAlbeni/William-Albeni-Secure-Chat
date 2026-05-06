@@ -23,61 +23,72 @@ namespace SecureChat.BLL.Services
             _cryptoService = cryptoService;
         }
 
-        public async Task<MessageDto> SendMessageAsync(Guid senderId, Guid receiverId, string plainTextMessage)
+        public async Task<MessageDto> SendMessageAsync(Guid senderId, Guid receiverId, string encryptedMessageFromClient, string encryptedAesKeyFromClient)
         {
-            // 1. Checking of users existence
+            // Check users existence
             var sender = await _userRepository.GetUserByIdAsync(senderId);
             var receiver = await _userRepository.GetUserByIdAsync(receiverId);
 
             if (sender == null || receiver == null)
                 throw new Exception("Sender or receiver does not exist in the system");
 
-            // 2. encrypt before storing
-            string encryptedPayload = _cryptoService.EncryptForDatabase(plainTextMessage);
+            string decryptedAesKey = _cryptoService.DecryptAesKeyFromClient(encryptedAesKeyFromClient);
 
-            // 3. Create object
+            string plainTextMessage = _cryptoService.DecryptMessage(encryptedMessageFromClient, decryptedAesKey);
+
+            string encryptedPayloadForDb = _cryptoService.EncryptForDatabase(plainTextMessage);
+
             var message = new Message
             {
                 SenderId = senderId,
                 ReceiverId = receiverId,
-                OriginalPayload = encryptedPayload,
-
+                OriginalPayload = encryptedPayloadForDb,
                 State = MessageState.Delivered,
-
                 DeliveryStatus = DeliveryStatus.SentToServer
             };
 
-            // 4. Storing in DB
             await _messageRepository.AddMessageAsync(message);
             await _messageRepository.SaveChangesAsync();
 
-            // 5. returning to UI as DTO
+            // no payload just as an Ack
             return new MessageDto
             {
                 Id = message.Id,
                 SenderId = message.SenderId,
                 ReceiverId = message.ReceiverId,
-                Text = plainTextMessage,
                 DeliveryStatus = message.DeliveryStatus,
                 SentAt = message.SentAt
             };
         }
 
-        public async Task<IEnumerable<MessageDto>> GetChatHistoryAsync(Guid user1Id, Guid user2Id)
-        { 
-            var messages = await _messageRepository.GetChatHistoryAsync(user1Id, user2Id);
+        public async Task<IEnumerable<MessageDto>> GetChatHistoryAsync(Guid callerId, Guid otherUserId)
+        {
+            var messages = await _messageRepository.GetChatHistoryAsync(callerId, otherUserId);
+            var caller = await _userRepository.GetUserByIdAsync(callerId);
 
-            // decrypt and convert to DTOs
-            var messageDtos = messages.Select(m => new MessageDto
+            var messageDtos = new List<MessageDto>();
+
+            foreach (var m in messages)
             {
-                Id = m.Id,
-                SenderId = m.SenderId,
-                ReceiverId = m.ReceiverId,
+                string plainText = _cryptoService.DecryptFromDatabase(m.OriginalPayload);
 
-                Text = _cryptoService.DecryptFromDatabase(m.OriginalPayload),
-                DeliveryStatus = m.DeliveryStatus,
-                SentAt = m.SentAt
-            }).ToList();
+                string newSessionAesKey = _cryptoService.GenerateAesKeyBase64();
+
+                string encryptedTextForCaller = _cryptoService.EncryptMessage(plainText, newSessionAesKey);
+
+                string encryptedAesKeyForCaller = _cryptoService.EncryptAesKeyForClient(newSessionAesKey, caller.PublicKey);
+
+                messageDtos.Add(new MessageDto
+                {
+                    Id = m.Id,
+                    SenderId = m.SenderId,
+                    ReceiverId = m.ReceiverId,
+                    EncryptedText = encryptedTextForCaller,
+                    EncryptedAesKey = encryptedAesKeyForCaller,
+                    DeliveryStatus = m.DeliveryStatus,
+                    SentAt = m.SentAt
+                });
+            }
 
             return messageDtos;
         }

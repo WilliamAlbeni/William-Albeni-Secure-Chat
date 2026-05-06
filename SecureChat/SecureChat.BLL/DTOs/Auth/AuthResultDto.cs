@@ -8,5 +8,6 @@ namespace SecureChat.BLL.DTOs.Auth
         public string Username { get; set; }
         public string Token { get; set; } // JWT Token (generated in API)
         public string PublicKey { get; set; }
+        public string ServerPublicKey { get; set; }
     }
 }

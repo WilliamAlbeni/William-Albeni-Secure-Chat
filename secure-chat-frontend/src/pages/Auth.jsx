@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { registerUser, loginUser } from '../services/api';
-import { generateRSAKeyPair } from '../services/cryptoService';
+import { cryptoService } from '../services/cryptoService';
 
 export default function Auth() {
     const [isLogin, setIsLogin] = useState(true);
@@ -20,16 +20,21 @@ export default function Auth() {
                 
                 const response = await loginUser({ username, password });
                 
+                // Saving session data
                 localStorage.setItem('currentUserId', response.userId);
                 localStorage.setItem('currentUsername', username);
+                
+                // NEW: Save Server Public Key for encryption in ChatRoom
+                // Make sure your backend login API returns serverPublicKey
+                if (response.serverPublicKey) {
+                    localStorage.setItem('serverPublicKey', response.serverPublicKey);
+                }
                 
                 navigate('/chat');
             } else {
                 
-                
-                // key pair generation (RSA)
-                const keys = await generateRSAKeyPair();
-
+                // Key pair generation (RSA)
+                const keys = await cryptoService.generateRSAKeyPair();
                 
                 const response = await registerUser({ 
                     username: username, 
@@ -37,12 +42,17 @@ export default function Auth() {
                     publicKey: keys.publicKey 
                 });
 
-                // saving private key in user's device
-                localStorage.setItem('userPrivateKey', keys.privateKey);
+                // CHANGED: saving private key as 'myPrivateKey' to match ChatRoom logic
+                localStorage.setItem(`privateKey_${response.userId}`, keys.privateKey);
                 
                 // saving session data
                 localStorage.setItem('currentUserId', response.userId);
                 localStorage.setItem('currentUsername', username);
+
+                // NEW: Save Server Public Key
+                if (response.serverPublicKey) {
+                    localStorage.setItem('serverPublicKey', response.serverPublicKey);
+                }
                 
                 navigate('/chat');
             }

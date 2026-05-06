@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Text;
 using System.Security.Cryptography;
 using Microsoft.Extensions.Options;
 using SecureChat.BLL.Interfaces;
@@ -21,28 +22,35 @@ namespace SecureChat.BLL.Services
             return _settings.ServerPublicKey;
         }
 
+        public string GenerateAesKeyBase64()
+        {
+            using var aes = Aes.Create();
+            aes.GenerateKey(); // AES-256
+            return Convert.ToBase64String(aes.Key);
+        }
+
         public string DecryptAesKeyFromClient(string encryptedAesKeyBase64)
         {
             byte[] dataToDecrypt = Convert.FromBase64String(encryptedAesKeyBase64);
             using var rsa = RSA.Create();
 
-            // getting the Server private key RSA
-            rsa.FromXmlString(_settings.ServerPrivateKey);
+            byte[] privateKeyBytes = Convert.FromBase64String(_settings.ServerPrivateKey);
+            rsa.ImportPkcs8PrivateKey(privateKeyBytes, out _);
 
-            // decrypting and returning the AES key
-            byte[] decryptedData = rsa.Decrypt(dataToDecrypt, RSAEncryptionPadding.OaepSHA256);
-            return Convert.ToBase64String(decryptedData);
+            byte[] decryptedData = rsa.Decrypt(dataToDecrypt, RSAEncryptionPadding.Pkcs1);
+
+            return Encoding.UTF8.GetString(decryptedData);
         }
 
-        public string EncryptAesKeyForClient(string rawAesKeyBase64, string clientPublicKeyXml)
+        public string EncryptAesKeyForClient(string rawAesKeyBase64, string clientPublicKeyBase64)
         {
-            byte[] dataToEncrypt = Convert.FromBase64String(rawAesKeyBase64);
+            byte[] dataToEncrypt = Encoding.UTF8.GetBytes(rawAesKeyBase64);
             using var rsa = RSA.Create();
 
-            // getting the receiver public key RSA
-            rsa.FromXmlString(clientPublicKeyXml);
+            byte[] publicKeyBytes = Convert.FromBase64String(clientPublicKeyBase64);
+            rsa.ImportSubjectPublicKeyInfo(publicKeyBytes, out _);
 
-            byte[] encryptedData = rsa.Encrypt(dataToEncrypt, RSAEncryptionPadding.OaepSHA256);
+            byte[] encryptedData = rsa.Encrypt(dataToEncrypt, RSAEncryptionPadding.Pkcs1);
             return Convert.ToBase64String(encryptedData);
         }
 
